@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <link rel="stylesheet" href="styles.css">
+        <title>Chat</title>
+    </head>
+    <body class="chat-page">
+        <aside id="chat-sidebar">
+            <button type="button" id="new-chat-button">New Chat</button>
+            <ul id="saved-chats-list"></ul>
+        </aside>
+        <main id="chat-container">
+            <h1>Ask Ollama a question</h1>
+            <div id="chat-box" aria-live="polite"></div>
+            <p id="waiting-indicator">Ollama is thinking...</p>
+            <form id="chat-form">
+                <label for="user-input">Message</label>
+                <textarea id="user-input" name="message" rows="2" required></textarea>
+                <button type="submit" id="send-btn">Send</button>
+            </form>
+        </main>
+
+    <script>
+        const API_BASE = 'http://localhost:3000';
+        const chatBox = document.getElementById("chat-box");
+        const chatForm = document.getElementById('chat-form');
+        const chatInput = document.getElementById('user-input');
+        const sendMessageButton = document.getElementById('send-btn');
+        const savedChatsList = document.getElementById('saved-chats-list');
+        const newChatButton = document.getElementById('new-chat-button');
+        const waitingIndicator = document.getElementById('waiting-indicator');
+        let activeChatId = null;
+        let isWaitingForReply = false;
+
+        function appendMessage(role, text) {
+            const p = document.createElement('p');
+            p.className = `chat-message ${role}-message`;
+            p.textContent = text;
+            chatBox.appendChild(p);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+        async function getSavedChats() {
+            const savedChatsResponse = await fetch(`${API_BASE}/api/chats`);
+            const savedChats = await savedChatsResponse.json();
+            savedChatsList.innerHTML = '';
+
+            for (let i = 0; i < savedChats.length; i++) {
+                let savedChat = savedChats[i];
+                const chatListItem = document.createElement('li');
+                chatListItem.textContent = `Chat #${savedChat.id}`;
+                if (savedChat.id === activeChatId) {
+                    chatListItem.className = 'selected-chat';
+                }
+
+                const deleteChatButton = document.createElement('button');
+                deleteChatButton.type = 'button';
+                deleteChatButton.className = 'delete-chat-button';
+                deleteChatButton.textContent = 'Delete';
+                deleteChatButton.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    deleteSavedChat(savedChat.id);
+                });
+                chatListItem.appendChild(deleteChatButton);
+
+                chatListItem.addEventListener('click', () => openSavedChat(savedChat.id));
+                savedChatsList.appendChild(chatListItem);
+            }
+        }
+
+        async function openSavedChat(selectedChatId) {
+            if (isWaitingForReply) return;
+            activeChatId = selectedChatId;
+            const chatResponse = await fetch(`${API_BASE}/api/chats/${selectedChatId}`);
+            const selectedChat = await chatResponse.json();
+            if (activeChatId !== selectedChatId) return;
+            chatBox.innerHTML = '';
+            for (let i = 0; i < selectedChat.messages.length; i++) {
+                let savedMessage = selectedChat.messages[i];
+                appendMessage(savedMessage.role, savedMessage.content);
+            }
+            getSavedChats();
+        }
+
+        async function createNewChat() {
+            if (isWaitingForReply) return;
+            const createResponse = await fetch(`${API_BASE}/api/chats`, { method: 'POST' });
+            const createdChat = await createResponse.json();
+            activeChatId = createdChat.id;
+            chatBox.innerHTML = '';
+            await getSavedChats();
+        }
+
+        async function deleteSavedChat(chatIdToDelete) {
+            if (isWaitingForReply) return;
+            await fetch(`${API_BASE}/api/chats/${chatIdToDelete}`, { method: 'DELETE' });
+            if (activeChatId === chatIdToDelete) {
+                activeChatId = null;
+                chatBox.innerHTML = '';
+            }
+            getSavedChats();
+        }
+
+        newChatButton.addEventListener('click', createNewChat);
+
+        chatForm.addEventListener('submit', async (event) => {
+            event.preventDefault()
+            const messageText = chatInput.value.trim();
+            if (!messageText || isWaitingForReply) return;
+            if (!activeChatId) {
+                await createNewChat();
+            }
+
+            appendMessage('user', messageText);
+            chatInput.value = '';
+            isWaitingForReply = true;
+            chatInput.disabled = true;
+            sendMessageButton.disabled = true;
+            waitingIndicator.style.display = 'block';
+
+            // fetch
+            try {
+                const response = await fetch(`${API_BASE}/api/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chatId: activeChatId, userMessage: messageText })
+                })
+
+                const data = await response.json();
+
+                if ( !response.ok || data.error ) {
+                    appendMessage('error', data.error || `Server returned ${response.status}`)
+                    return
+                }
+
+                appendMessage('assistant', data.reply)
+            } catch(error) {
+                appendMessage('error', error instanceof Error ? error.message : String(error))
+            } finally {
+                isWaitingForReply = false;
+                chatInput.disabled = false;
+                sendMessageButton.disabled = false;
+                waitingIndicator.style.display = 'none';
+                getSavedChats();
+            }
+        });
+        getSavedChats();
+    </script>
+
+    </body>
+</html>
